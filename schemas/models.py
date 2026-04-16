@@ -22,3 +22,7 @@ class ExpenseCreate(BaseModel):
 	amount: float
 	category: str
 	type: str
+	
+	
+class VerifyTokenRequest(BaseModel):
+	refresh_token: str

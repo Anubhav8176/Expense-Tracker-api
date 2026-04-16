@@ -2,12 +2,14 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from starlette import status
 from core.authentication import create_access_token, create_refresh_token, hash_password, refresh_token_expire_days, verify_password
+from core.config import settings
 from db.RefreshToken import RefreshToken
 from db.User import User
 from db.session import get_db
-from schemas.models import AuthResponse, LoginRequest, UserCreate
+from schemas.models import VerifyTokenRequest, AuthResponse, LoginRequest, UserCreate
 
 router = APIRouter()
+
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 def register_user(user_create: UserCreate, db=Depends(get_db)) -> AuthResponse:
@@ -36,6 +38,7 @@ def register_user(user_create: UserCreate, db=Depends(get_db)) -> AuthResponse:
     )
     db.add(new_token)
     db.commit()
+    db.refresh(new_token)
 
     return AuthResponse(access_token=access_token, refresh_token=refresh_token)
 
@@ -54,6 +57,7 @@ def login_user(login_request: LoginRequest, db=Depends(get_db)) -> AuthResponse:
     access_token = create_access_token(str(user.id))
     refresh_token = create_refresh_token(str(user.id))
 
+    # Revoke all previous active tokens
     db.query(RefreshToken).filter(
         RefreshToken.user_id == user.id,
         RefreshToken.is_revoked == False
@@ -70,3 +74,56 @@ def login_user(login_request: LoginRequest, db=Depends(get_db)) -> AuthResponse:
     db.commit()
 
     return AuthResponse(access_token=access_token, refresh_token=refresh_token)
+
+
+@router.post("/refresh")
+def update_refresh_token(token: VerifyTokenRequest, db=Depends(get_db)) -> AuthResponse:
+    refresh_token_data: RefreshToken = db.query(RefreshToken).filter(
+        RefreshToken.refresh_token == token.refresh_token
+    ).first()
+
+    if not refresh_token_data:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    if refresh_token_data.is_revoked:
+        raise HTTPException(status_code=401, detail="Refresh token has been revoked")
+
+    user_id = refresh_token_data.user_id
+    now = datetime.now(timezone.utc)
+
+    expires_at = refresh_token_data.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if expires_at > now:
+        new_access_token = create_access_token(user_id=str(user_id))
+
+        refresh_token_data.access_token = new_access_token
+        db.commit()
+        db.refresh(refresh_token_data)
+
+        return AuthResponse(
+            access_token=new_access_token,
+            refresh_token=token.refresh_token
+        )
+
+    else:
+        new_access_token = create_access_token(user_id=str(user_id))
+        new_refresh_token = create_refresh_token(user_id=str(user_id))
+
+        refresh_token_data.is_revoked = True
+
+        new_token_record = RefreshToken(
+            user_id=user_id,
+            access_token=new_access_token,
+            refresh_token=new_refresh_token,
+            is_revoked=False,
+            expires_at=now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        )
+        db.add(new_token_record)
+        db.commit()
+
+        return AuthResponse(
+            access_token=new_access_token,
+            refresh_token=new_refresh_token
+        )

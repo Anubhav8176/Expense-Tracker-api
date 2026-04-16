@@ -19,7 +19,7 @@ class RefreshToken(Base):
         nullable=False
     )
     access_token: Mapped[str] = mapped_column(String, nullable=False)
-    refresh_token: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    refresh_token: Mapped[str] = mapped_column(String, nullable=False, unique=True, index=True)
     is_revoked: Mapped[bool] = mapped_column(Boolean, default=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
